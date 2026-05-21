@@ -6,7 +6,7 @@ set -euo pipefail
 # --- Paths ---------------------------------------------------------------------
 
 WAM_HOME="${WAM_HOME:-$HOME/.claude/whack-a-mole}"
-WAM_CONFIG="${WAM_CONFIG:-$HOME/.config/whack-a-mole/config.yaml}"
+WAM_CONFIG="${WAM_CONFIG:-$WAM_HOME/config.yaml}"
 WAM_STATE_DIR="${WAM_STATE_DIR:-$HOME/.local/state/whack-a-mole}"
 WAM_STATE_FILE="$WAM_STATE_DIR/state.json"
 WAM_LOG_DIR="$WAM_STATE_DIR/logs"

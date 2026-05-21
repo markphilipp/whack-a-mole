@@ -1,7 +1,9 @@
 # whack-a-mole config
 #
-# Copy this to ~/.config/whack-a-mole/config.yaml (install.sh does that for you
-# the first time) and edit the repo list + toggles.
+# Lives in the repo. The daemon reads this file in place (via the
+# ~/.claude/whack-a-mole symlink install.sh creates). Edit directly.
+#
+# Keep the repo private if your local paths or github login are sensitive.
 
 poll_interval_seconds: 180
 
@@ -29,10 +31,6 @@ repos:
   - github: leaflink/marketplace
     local: /Users/mark.philipp/Projects/llp-local/applications/marketplace
     worktree_root: .claude/worktrees
-    # Quick checks the spawned Claude is allowed to run inside the worktree.
-    # MUST be fast and file-scoped. NEVER include tests, docker, or anything
-    # that touches the DB / network. CI runs the heavy stuff.
-    # {changed} expands to the space-separated list of changed file paths.
     quick_checks:
       - ruff check {changed}
       - ruff format --check {changed}

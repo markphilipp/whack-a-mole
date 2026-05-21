@@ -3,11 +3,12 @@
 #
 # Idempotent:
 #   - Validates required deps (gh, jq, yq, claude).
-#   - Creates ~/.config/whack-a-mole/ and ~/.local/state/whack-a-mole/{logs}
-#   - Copies config.example.yaml → ~/.config/whack-a-mole/config.yaml if absent
+#   - Creates ~/.local/state/whack-a-mole/{logs} for state + logs
 #   - Symlinks the repo into ~/.claude/whack-a-mole
 #   - Symlinks the launchd plist into ~/Library/LaunchAgents/
 #   - Optionally loads launchd (--load)
+#
+# Config lives in the repo at ./config.yaml. Edit it directly.
 
 set -euo pipefail
 
@@ -58,25 +59,19 @@ ok "gh authenticated as $(gh api user --jq .login)"
 
 # --- Create runtime dirs ------------------------------------------------------
 
-CONFIG_DIR="$HOME/.config/whack-a-mole"
 STATE_DIR="$HOME/.local/state/whack-a-mole"
 LOG_DIR="$STATE_DIR/logs"
 
 say "Creating runtime dirs"
-mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
-ok "$CONFIG_DIR"
+mkdir -p "$STATE_DIR" "$LOG_DIR"
 ok "$STATE_DIR"
 ok "$LOG_DIR"
 
-# --- Copy config if absent ----------------------------------------------------
+# --- Confirm config is present in the repo -----------------------------------
 
-CONFIG_FILE="$CONFIG_DIR/config.yaml"
-if [[ -f "$CONFIG_FILE" ]]; then
-  ok "config exists: $CONFIG_FILE (not overwriting)"
-else
-  cp "$SCRIPT_DIR/config.example.yaml" "$CONFIG_FILE"
-  ok "config created: $CONFIG_FILE (edit it before --load!)"
-fi
+CONFIG_FILE="$SCRIPT_DIR/config.yaml"
+[[ -f "$CONFIG_FILE" ]] || { err "config not found: $CONFIG_FILE"; exit 1; }
+ok "config: $CONFIG_FILE"
 
 # --- Initialize state file if absent ------------------------------------------
 

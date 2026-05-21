@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # whack-a-mole uninstaller. Reverses install.sh.
 #
-# By default: unloads launchd, removes symlinks. Leaves config + state in place.
-# Pass --purge to also delete ~/.config/whack-a-mole and ~/.local/state/whack-a-mole.
+# By default: unloads launchd, removes symlinks. Leaves state in place.
+# Pass --purge to also delete ~/.local/state/whack-a-mole.
 
 set -euo pipefail
 
@@ -29,8 +29,8 @@ if [[ -L "$CLAUDE_LINK" ]]; then
 fi
 
 if (( PURGE )); then
-  rm -rf "$HOME/.config/whack-a-mole" "$HOME/.local/state/whack-a-mole"
-  echo "✓ purged config + state"
+  rm -rf "$HOME/.local/state/whack-a-mole"
+  echo "✓ purged state"
 else
-  echo "ℹ config + state kept. --purge to remove them."
+  echo "ℹ state kept. --purge to remove it."
 fi

@@ -36,20 +36,21 @@ cd ~/Projects/whack-a-mole
 The installer:
 
 - Validates `gh`/`jq`/`yq`/`claude` are present and `gh` is authenticated
-- Creates `~/.config/whack-a-mole/` and `~/.local/state/whack-a-mole/{logs,}`
-- Copies `config.example.yaml` → `~/.config/whack-a-mole/config.yaml` (only if absent)
+- Creates `~/.local/state/whack-a-mole/{logs,}` for state + logs
 - Symlinks the repo into `~/.claude/whack-a-mole`
 - Symlinks the launchd plist into `~/Library/LaunchAgents/`
 
-Edit `~/.config/whack-a-mole/config.yaml` (set `my_github_login`, add your repos), then:
+Edit `config.yaml` (set `my_github_login`, add your repos), then:
 
 ```bash
 ./install.sh --load    # starts the watcher via launchd
 ```
 
+The config lives in the repo at `./config.yaml`. The daemon reads it in place via the `~/.claude/whack-a-mole` symlink — no separate copy is kept under `~/.config`. Treat the repo as private if your paths or login are sensitive.
+
 ## Config
 
-See `config.example.yaml` for the full schema. Key fields:
+See `config.yaml` for the full schema. Key fields:
 
 | Field | What it does |
 |---|---|
@@ -74,11 +75,11 @@ The three modes exist so you can de-risk progressively:
 2. **beta** — the watcher fully dispatches: it creates a worktree, runs Claude, lets Claude edit files locally. But `git push` and `gh api` reply calls are skipped. The worktree is kept on disk for inspection. Use this to eyeball one or two real auto-fixes before flipping to live.
 3. **live** — end-to-end. Pushes commits with auto-fix trailers and posts replies on the PR.
 
-Flip the mode by editing `~/.config/whack-a-mole/config.yaml` and re-saving. The daemon re-reads config every poll cycle, so no restart needed.
+Flip the mode by editing `config.yaml` in the repo and re-saving. The daemon re-reads config every poll cycle, so no restart needed.
 
 ## Adding a repo
 
-1. Append to the `repos:` list in `~/.config/whack-a-mole/config.yaml`.
+1. Append to the `repos:` list in `config.yaml`.
 2. Make sure the `local:` path exists and is a clean checkout.
 3. List `quick_checks` appropriate to the language stack — linter / formatter check / type checker only. Never tests or docker.
 
@@ -114,13 +115,13 @@ Source (this repo, lives at `~/Projects/whack-a-mole`):
 ```
 .
 ├── README.md                                       (you are here)
+├── config.yaml                                     live config (read in place via symlink)
 ├── watcher.sh                                      polling loop
 ├── dispatch.sh                                     per-trigger handler
 ├── lib.sh                                          shared helpers
 ├── prompts/
 │   ├── bugbot-comment.md                           rubric for bugbot trigger
 │   └── ci-failure.md                               rubric for CI trigger
-├── config.example.yaml                             template
 ├── launchd/com.markphilipp.whack-a-mole.plist      auto-start
 ├── install.sh                                      idempotent installer
 ├── uninstall.sh
@@ -130,9 +131,8 @@ Source (this repo, lives at `~/Projects/whack-a-mole`):
 Runtime (after `install.sh`):
 
 ```
-~/.claude/whack-a-mole → ~/Projects/whack-a-mole           (symlink)
+~/.claude/whack-a-mole → ~/Projects/whack-a-mole           (symlink — daemon reads config + scripts through here)
 ~/Library/LaunchAgents/com.markphilipp.whack-a-mole.plist → ...  (symlink)
-~/.config/whack-a-mole/config.yaml                          your personal config
 ~/.local/state/whack-a-mole/
 ├── state.json                                              last-seen comment IDs + ci failures per repo
 └── logs/
@@ -156,6 +156,6 @@ Runtime (after `install.sh`):
 ## Uninstall
 
 ```bash
-~/Projects/whack-a-mole/uninstall.sh          # remove symlinks + launchd, keep config/state
-~/Projects/whack-a-mole/uninstall.sh --purge  # also delete config + state
+~/Projects/whack-a-mole/uninstall.sh          # remove symlinks + launchd, keep state
+~/Projects/whack-a-mole/uninstall.sh --purge  # also delete state dir
 ```
