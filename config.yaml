@@ -15,6 +15,15 @@ poll_interval_seconds: 180
 #   live  — full end-to-end. Pushes commits and posts replies.
 mode: beta
 
+# Model routing for spawned Claude sessions.
+# Default is cost-oriented; escalation is used for "complex" trigger signals and
+# optionally as a fallback if the default-model run exits non-zero.
+models:
+  default: sonnet
+  escalation: opus
+  intelligent_switching: true
+  escalate_on_failure: true
+
 # Only act on PRs you authored. Set to false to also handle teammates' / bots'
 # PRs (risky — they'll get auto-replies signed as you).
 only_my_prs: true

@@ -33,6 +33,12 @@ done
 [[ "$KIND" == "bugbot" || "$KIND" == "ci" ]] || die "invalid --kind $KIND"
 
 MODE="$(cfg .mode)"
+DEFAULT_MODEL="$(cfg '.models.default // "sonnet"')"
+ESCALATION_MODEL="$(cfg '.models.escalation // "opus"')"
+INTELLIGENT_SWITCHING="$(cfg '.models.intelligent_switching // true')"
+ESCALATE_ON_FAILURE="$(cfg '.models.escalate_on_failure // true')"
+[[ -n "$DEFAULT_MODEL" && "$DEFAULT_MODEL" != "null" ]] || DEFAULT_MODEL="sonnet"
+[[ -n "$ESCALATION_MODEL" && "$ESCALATION_MODEL" != "null" ]] || ESCALATION_MODEL="opus"
 DISPATCH_LOG="$WAM_LOG_DIR/dispatch-$KIND-pr${PR}-${TRIGGER_ID}.log"
 
 dlog() {
@@ -41,6 +47,52 @@ dlog() {
 }
 
 dlog "dispatch start kind=$KIND repo=$REPO pr=$PR trigger_id=$TRIGGER_ID mode=$MODE"
+
+MODEL_REASON="default"
+
+should_use_escalation_model() {
+  local kind="$1" trigger_json="$2"
+  local signal_text
+  signal_text=$(
+    echo "$trigger_json" \
+      | jq -r '[
+          .body // "",
+          .path // "",
+          .name // "",
+          .title // "",
+          .output.summary // "",
+          .output.text // ""
+        ] | join(" ")' 2>/dev/null \
+      | tr '[:upper:]' '[:lower:]'
+  )
+  local signal_len=${#signal_text}
+
+  if (( signal_len > 4000 )); then
+    MODEL_REASON="large-trigger-payload"
+    return 0
+  fi
+
+  if [[ "$kind" == "bugbot" ]] && [[ "$signal_text" =~ (security|auth|authorization|authentication|privilege|xss|sql[[:space:]]*injection|path[[:space:]]*traversal|csrf|race[[:space:]]*condition|deadlock|concurren|data[[:space:]]*corruption|crypto|encryption|critical|high[[:space:]]*severity) ]]; then
+    MODEL_REASON="bugbot-complexity-signal"
+    return 0
+  fi
+
+  if [[ "$kind" == "ci" ]] && [[ "$signal_text" =~ (e2e|integration|migration|release|deploy|security|sast|dast|terraform|kubernetes|performance|load[[:space:]]*test) ]]; then
+    MODEL_REASON="ci-complexity-signal"
+    return 0
+  fi
+
+  return 1
+}
+
+pick_model() {
+  local chosen="$DEFAULT_MODEL"
+  MODEL_REASON="default"
+  if [[ "$INTELLIGENT_SWITCHING" == "true" ]] && should_use_escalation_model "$KIND" "$TRIGGER_JSON"; then
+    chosen="$ESCALATION_MODEL"
+  fi
+  printf '%s' "$chosen"
+}
 
 # --- Locate repo + resolve PR branch info -------------------------------------
 
@@ -157,17 +209,42 @@ export WHACKAMOLE_QUICK_CHECKS="$QUICK_CHECKS"
 # as a belt-and-suspenders against the rubric.
 DISALLOWED='Bash(make test*) Bash(make docker-test*) Bash(pytest*) Bash(pnpm test*) Bash(npm test*) Bash(vitest*) Bash(playwright*) Bash(docker*) Bash(docker-compose*) Bash(make start*)'
 
-(
-  cd "$WT_PATH"
-  claude --print \
-    --model opus \
-    --permission-mode auto \
-    --append-system-prompt "$(cat "$PROMPT_FILE")" \
-    --disallowed-tools $DISALLOWED \
-    --output-format text \
-    "$USER_MSG" 2>&1 | tee -a "$DISPATCH_LOG"
-)
+run_claude_session() {
+  local model="$1"
+  dlog "launching claude (mode=$MODE, kind=$KIND, model=$model, reason=$MODEL_REASON, permission=auto)"
+  (
+    cd "$WT_PATH"
+    claude --print \
+      --model "$model" \
+      --permission-mode auto \
+      --append-system-prompt "$(cat "$PROMPT_FILE")" \
+      --disallowed-tools $DISALLOWED \
+      --output-format text \
+      "$USER_MSG" 2>&1 | tee -a "$DISPATCH_LOG"
+    exit "${PIPESTATUS[0]}"
+  )
+}
 
-dlog "claude session done (exit $?)"
+SELECTED_MODEL="$(pick_model)"
+set +e
+run_claude_session "$SELECTED_MODEL"
+CLAUDE_EXIT=$?
+set -e
+dlog "claude session done (model=$SELECTED_MODEL exit=$CLAUDE_EXIT)"
+
+if (( CLAUDE_EXIT != 0 )) && [[ "$ESCALATE_ON_FAILURE" == "true" ]] && [[ "$SELECTED_MODEL" != "$ESCALATION_MODEL" ]]; then
+  MODEL_REASON="fallback-after-nonzero-exit"
+  dlog "retrying with escalation model=$ESCALATION_MODEL after model=$SELECTED_MODEL exit=$CLAUDE_EXIT"
+  set +e
+  run_claude_session "$ESCALATION_MODEL"
+  CLAUDE_EXIT=$?
+  set -e
+  dlog "claude session done (model=$ESCALATION_MODEL exit=$CLAUDE_EXIT)"
+fi
+
+if (( CLAUDE_EXIT != 0 )); then
+  dlog "dispatch exiting non-zero (claude exit=$CLAUDE_EXIT)"
+  exit "$CLAUDE_EXIT"
+fi
 
 # Teardown happens via trap.

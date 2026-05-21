@@ -18,6 +18,46 @@ source "$SCRIPT_DIR/lib.sh"
 log "whack-a-mole watcher starting (config=$WAM_CONFIG)"
 log "mode=$(cfg .mode)  poll_interval=$(cfg .poll_interval_seconds)s  only_my_prs=$(cfg .only_my_prs)"
 
+tuple_is_newer() {
+  # Returns success when (ts,id) is strictly newer than (cursor_ts,cursor_id).
+  local ts="$1" id="$2" cursor_ts="$3" cursor_id="$4"
+  if [[ "$ts" > "$cursor_ts" ]]; then
+    return 0
+  fi
+  if [[ "$ts" == "$cursor_ts" ]] && (( id > cursor_id )); then
+    return 0
+  fi
+  return 1
+}
+
+normalize_check_name() {
+  local raw="$1"
+  local normalized
+  normalized=$(printf '%s' "$raw" \
+    | sed -E 's/[[:space:]]*\([^)]*\)$//' \
+    | sed -E 's/[[:space:]]*\[[^]]*\]$//' \
+    | sed -E 's/[[:space:]]*-[[:space:]]*(ubuntu|macos|windows|linux|node|python|py|go|jdk|java|xcode|ios|android)[[:alnum:]._-]*$//' \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -s ' ' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  [[ -n "$normalized" ]] || normalized=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+  printf '%s' "$normalized"
+}
+
+record_ci_seen() {
+  local slug="$1"
+  local legacy_key="$2"
+  local normalized_key="$3"
+  local value="$4"
+  state_apply \
+    --arg slug "$slug" \
+    --arg legacy_key "$legacy_key" \
+    --arg normalized_key "$normalized_key" \
+    --arg value "$value" \
+    '.repos[$slug].ci_seen[$legacy_key] = $value
+     | .repos[$slug].ci_seen[$normalized_key] = $value'
+}
+
 # --- Trigger A: bugbot comments ------------------------------------------------
 
 poll_bugbot_for_repo() {
@@ -26,14 +66,18 @@ poll_bugbot_for_repo() {
   local me; me=$(cfg .my_github_login)
   local only_mine; only_mine=$(cfg .only_my_prs)
 
-  local since
-  since=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_last_seen // ""')
-  if [[ -z "$since" ]]; then
+  local cursor_ts
+  cursor_ts=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_cursor.ts // .repos[$slug].bugbot_last_seen // ""')
+  if [[ -z "$cursor_ts" ]]; then
     # First run: only look at the past hour to avoid replaying ancient comments.
-    since=$(date -u -v-1H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '-1 hour' +"%Y-%m-%dT%H:%M:%SZ")
+    cursor_ts=$(date -u -v-1H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '-1 hour' +"%Y-%m-%dT%H:%M:%SZ")
   fi
+  local cursor_id
+  cursor_id=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_cursor.id // 0')
+  [[ "$cursor_id" =~ ^[0-9]+$ ]] || cursor_id=0
 
-  local newest="$since"
+  local max_seen_ts="$cursor_ts"
+  local max_seen_id="$cursor_id"
 
   # Three endpoints: PR review line comments, issue comments (general PR comments),
   # and PR reviews (summary reviews). Bugbot uses all three depending on finding.
@@ -44,7 +88,7 @@ poll_bugbot_for_repo() {
 
   for ep in "${endpoints[@]}"; do
     local raw
-    raw=$(gh api --paginate "$ep?sort=created&direction=asc&since=$since&per_page=100" 2>/dev/null || echo '[]')
+    raw=$(gh api --paginate "$ep?sort=created&direction=asc&since=$cursor_ts&per_page=100" 2>/dev/null || echo '[]')
     # Filter to cursor[bot] comments on PRs (issues/comments includes issues too;
     # filter by issue_url containing "/pulls/" when present).
     local matches
@@ -61,11 +105,28 @@ poll_bugbot_for_repo() {
       pr_url=$(echo "$row" | jq -r '.pull_request_url // .html_url')
       comment_id=$(echo "$row" | jq -r '.id')
       created=$(echo "$row" | jq -r '.created_at')
+      [[ "$comment_id" =~ ^[0-9]+$ ]] || continue
+
+      local is_newer=0
+      if tuple_is_newer "$created" "$comment_id" "$cursor_ts" "$cursor_id"; then
+        is_newer=1
+      fi
+      if tuple_is_newer "$created" "$comment_id" "$max_seen_ts" "$max_seen_id"; then
+        max_seen_ts="$created"
+        max_seen_id="$comment_id"
+      fi
 
       # Derive PR number from URL.
       local pr
       pr=$(echo "$pr_url" | grep -oE '/(pull|pulls)/[0-9]+' | grep -oE '[0-9]+$')
       [[ -z "$pr" ]] && continue
+
+      local seen
+      seen=$(state_read --arg slug "$slug" --arg comment_id "$comment_id" '.repos[$slug].bugbot_seen[$comment_id] // ""')
+      if [[ -n "$seen" ]]; then
+        log "bugbot SUPPRESS seen repo=$slug pr=$pr comment=$comment_id"
+        continue
+      fi
 
       # Author filter.
       if [[ "$only_mine" == "true" ]]; then
@@ -73,6 +134,9 @@ poll_bugbot_for_repo() {
         author=$(pr_author "$slug" "$pr")
         [[ "$author" == "$me" ]] || continue
       fi
+
+      # Stable cursor: only dispatch rows newer than (cursor_ts, cursor_id).
+      (( is_newer == 1 )) || continue
 
       # Loop guard: count Bugbot-Auto-Fix trailers on PR.
       local head_ref; head_ref=$(pr_head_ref "$slug" "$pr")
@@ -84,6 +148,12 @@ poll_bugbot_for_repo() {
         continue
       fi
 
+      # Mark seen before dispatch for at-most-once behavior.
+      state_apply \
+        --arg slug "$slug" \
+        --arg comment_id "$comment_id" \
+        '.repos[$slug].bugbot_seen[$comment_id] = "dispatched"'
+
       log "bugbot DISPATCH repo=$slug pr=$pr comment=$comment_id"
       "$SCRIPT_DIR/dispatch.sh" \
         --kind bugbot \
@@ -91,8 +161,6 @@ poll_bugbot_for_repo() {
         --pr "$pr" \
         --trigger-id "$comment_id" \
         --trigger-json "$row" || log "dispatch returned non-zero for pr=$pr comment=$comment_id"
-
-      [[ "$created" > "$newest" ]] && newest="$created"
     done <<< "$matches"
   done
 
@@ -100,8 +168,14 @@ poll_bugbot_for_repo() {
   # on this endpoint; we have to iterate PRs. Cheap because we only look at
   # OPEN PRs by `me` (Trigger B already enumerates these).
 
-  if [[ "$newest" != "$since" ]]; then
-    state_apply --arg slug "$slug" --arg ts "$newest" '.repos[$slug].bugbot_last_seen = $ts'
+  if tuple_is_newer "$max_seen_ts" "$max_seen_id" "$cursor_ts" "$cursor_id"; then
+    state_apply \
+      --arg slug "$slug" \
+      --arg ts "$max_seen_ts" \
+      --argjson id "$max_seen_id" \
+      '.repos[$slug].bugbot_cursor.ts = $ts
+       | .repos[$slug].bugbot_cursor.id = $id
+       | .repos[$slug].bugbot_last_seen = $ts'
   fi
 }
 
@@ -130,26 +204,42 @@ poll_ci_for_repo() {
     # Get failed check-runs for this SHA.
     local runs
     runs=$(gh api --paginate "repos/$slug/commits/$sha/check-runs?per_page=100" 2>/dev/null \
-      | jq -c '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")' \
+      | jq -c '.check_runs[] | select(.status == "completed") | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")' \
       || echo '')
     [[ -z "$runs" ]] && continue
 
     while IFS= read -r run; do
       [[ -z "$run" ]] && continue
-      local check_id check_name
+      local check_id check_name conclusion normalized_check_name legacy_key normalized_key
       check_id=$(echo "$run" | jq -r '.id')
       check_name=$(echo "$run" | jq -r '.name')
-      local key="$pr-$sha-$check_id"
+      conclusion=$(echo "$run" | jq -r '.conclusion // ""')
+      normalized_check_name=$(normalize_check_name "$check_name")
+      legacy_key="$pr-$sha-$check_id"
+      normalized_key="$pr-$sha-$normalized_check_name"
 
-      # Already dispatched for this exact failure?
+      # Already dispatched/suppressed for this failure (legacy id key or normalized key).
       local seen
-      seen=$(state_read --arg slug "$slug" --arg k "$key" '.repos[$slug].ci_seen[$k] // ""')
-      [[ -n "$seen" ]] && continue
+      seen=$(state_read \
+        --arg slug "$slug" \
+        --arg legacy_key "$legacy_key" \
+        --arg normalized_key "$normalized_key" \
+        '.repos[$slug].ci_seen[$legacy_key] // .repos[$slug].ci_seen[$normalized_key] // ""')
+      if [[ -n "$seen" ]]; then
+        log "ci SUPPRESS seen repo=$slug pr=$pr check=$check_name sha=${sha:0:7}"
+        continue
+      fi
+
+      if [[ "$conclusion" == "cancelled" ]]; then
+        log "ci SUPPRESS cancelled repo=$slug pr=$pr check=$check_name sha=${sha:0:7}"
+        record_ci_seen "$slug" "$legacy_key" "$normalized_key" "cancelled"
+        continue
+      fi
 
       # Suppression: HEAD already has a CI-Auto-Fix trailer for this check+sha.
       if head_has_trailer "$local_repo" "$head_ref" "CI-Auto-Fix: $check_name@$sha"; then
         log "ci SUPPRESS pr=$pr check=$check_name (HEAD trailer matches)"
-        state_apply --arg slug "$slug" --arg k "$key" '.repos[$slug].ci_seen[$k] = "suppressed"'
+        record_ci_seen "$slug" "$legacy_key" "$normalized_key" "suppressed"
         continue
       fi
 
@@ -158,7 +248,7 @@ poll_ci_for_repo() {
       trailer_count=$(count_trailers "$local_repo" "$head_ref" "CI-Auto-Fix")
       if (( trailer_count >= cap )); then
         log "ci SKIP pr=$pr check=$check_name (trailer count $trailer_count >= cap $cap)"
-        state_apply --arg slug "$slug" --arg k "$key" '.repos[$slug].ci_seen[$k] = "capped"'
+        record_ci_seen "$slug" "$legacy_key" "$normalized_key" "capped"
         continue
       fi
 
@@ -170,7 +260,7 @@ poll_ci_for_repo() {
         --trigger-id "$check_id" \
         --trigger-json "$run" || log "dispatch returned non-zero for pr=$pr check=$check_name"
 
-      state_apply --arg slug "$slug" --arg k "$key" '.repos[$slug].ci_seen[$k] = "dispatched"'
+      record_ci_seen "$slug" "$legacy_key" "$normalized_key" "dispatched"
     done <<< "$runs"
   done <<< "$prs"
 }
@@ -178,11 +268,11 @@ poll_ci_for_repo() {
 # --- Main loop -----------------------------------------------------------------
 
 main() {
-  local interval; interval=$(cfg .poll_interval_seconds)
-  local bugbot_on; bugbot_on=$(cfg .triggers.bugbot_comments)
-  local ci_on; ci_on=$(cfg .triggers.ci_failures)
-
   while true; do
+    local interval; interval=$(cfg .poll_interval_seconds)
+    local bugbot_on; bugbot_on=$(cfg .triggers.bugbot_comments)
+    local ci_on; ci_on=$(cfg .triggers.ci_failures)
+
     local n; n=$(cfg_repo_count)
     for ((i=0; i<n; i++)); do
       local slug; slug=$(cfg_repo "$i" .github)

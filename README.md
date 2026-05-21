@@ -2,7 +2,7 @@
 
 Moles keep popping up on your PRs — Cursor bugbot findings, failing CI checks. `whack-a-mole` watches for them and bonks each one with a Claude session before you have to.
 
-It's a small bash daemon that polls allowlisted GitHub repos every few minutes and, when it sees a new `cursor[bot]` review comment or a new failed CI check on a PR you authored, spins up a headless Opus session in an isolated git worktree on that PR's branch. The session reads the trigger, fixes if it's confident, pushes, and replies. Otherwise it pings you via the Claude app and tags you on the PR.
+It's a small bash daemon that polls allowlisted GitHub repos every few minutes and, when it sees a new `cursor[bot]` review comment or a new failed CI check on a PR you authored, spins up a headless Claude session in an isolated git worktree on that PR's branch. By default it uses Sonnet first and escalates to Opus only when trigger signals look complex (or if the Sonnet run exits non-zero). The session reads the trigger, fixes if it's confident, pushes, and replies. Otherwise it pings you via the Claude app and tags you on the PR.
 
 ## Why
 
@@ -55,6 +55,10 @@ See `config.yaml` for the full schema. Key fields:
 | Field | What it does |
 |---|---|
 | `mode` | `alpha` = detect only · `beta` = full dispatch except push/reply · `live` = end-to-end |
+| `models.default` | Primary model used for dispatches (default `sonnet`) |
+| `models.escalation` | Escalation model for complex triggers / fallback (default `opus`) |
+| `models.intelligent_switching` | If `true`, dispatch pre-classifies trigger text and starts directly on escalation model for complexity/security-like signals |
+| `models.escalate_on_failure` | If `true`, retry once on escalation model when the default-model run exits non-zero |
 | `only_my_prs` | If `true`, only act on PRs whose author == `my_github_login` |
 | `my_github_login` | Your GitHub username |
 | `max_bugbot_fixes_per_pr` | Tight cap (default 2) on auto-fix commits for bugbot findings |
@@ -75,7 +79,7 @@ The three modes exist so you can de-risk progressively:
 2. **beta** — the watcher fully dispatches: it creates a worktree, runs Claude, lets Claude edit files locally. But `git push` and `gh api` reply calls are skipped. The worktree is kept on disk for inspection. Use this to eyeball one or two real auto-fixes before flipping to live.
 3. **live** — end-to-end. Pushes commits with auto-fix trailers and posts replies on the PR.
 
-Flip the mode by editing `config.yaml` in the repo and re-saving. The daemon re-reads config every poll cycle, so no restart needed.
+Flip the mode by editing `config.yaml` in the repo and re-saving. The daemon re-reads config every poll cycle, so no restart is needed. That same hot reload applies to `poll_interval_seconds`, `triggers.bugbot_comments`, and `triggers.ci_failures`.
 
 ## Adding a repo
 
@@ -90,14 +94,23 @@ The daemon picks it up on the next poll cycle.
 | Loop type | Mechanism | Cap |
 |---|---|---|
 | Bugbot ↔ fix | Commits with `Bugbot-Auto-Fix: <comment_id>` trailer | `max_bugbot_fixes_per_pr` (default 2) |
+| Bugbot replay dedupe | Per-repo `bugbot_seen[comment_id]` map + tuple cursor `(bugbot_cursor.ts, bugbot_cursor.id)`; repeated IDs are logged as `bugbot SUPPRESS seen ...` | implicit (suppression) |
 | CI fail ↔ fix | Commits with `CI-Auto-Fix: <check>@<sha>` trailer | `max_ci_fix_attempts` (default 10) |
+| CI cancelled matrix legs | `conclusion=cancelled` runs are suppressed (logged) and never dispatched | implicit (suppression) |
+| CI dedupe across reruns | Seen-state records both legacy key (`pr+sha+check_id`) and normalized key (`pr+sha+normalized_check_name`, with trailing matrix/env suffixes stripped) to collapse equivalent same-SHA failures | implicit (suppression) |
 | CI re-run after push | Head commit's `CI-Auto-Fix:` trailer matches the failing `<check>@<sha>` | implicit (suppression) |
 
 When a cap is hit, the watcher sends a PushNotification to the Claude app instead of dispatching another fix.
 
 ## What the spawned Claude does (and doesn't)
 
-It uses **Opus** with **auto** permission mode — `claude --model opus --permission-mode auto`. Auto mode lets Opus make judgment calls about which actions are safe rather than blanket-accepting every edit. When it does need to prompt, the existing `~/.claude/settings.json` Notification hook fires a local mac notification, and the rubric tells Claude to additionally call **PushNotification** for the Claude app.
+It uses **auto** permission mode and model routing from `config.yaml`:
+
+- Starts with `models.default` (recommended: `sonnet` for cost control).
+- Escalates to `models.escalation` (recommended: `opus`) when trigger text looks complex (for example security/concurrency signals or heavyweight CI check categories).
+- Optionally retries once on the escalation model when a default-model run exits non-zero (`models.escalate_on_failure: true`).
+
+This keeps routine fixes cheap while preserving a high-capability path for tougher cases. When Claude does need to prompt, the existing `~/.claude/settings.json` Notification hook fires a local mac notification, and the rubric tells Claude to additionally call **PushNotification** for the Claude app.
 
 It is restricted to:
 
@@ -134,7 +147,7 @@ Runtime (after `install.sh`):
 ~/.claude/whack-a-mole → ~/Projects/whack-a-mole           (symlink — daemon reads config + scripts through here)
 ~/Library/LaunchAgents/com.markphilipp.whack-a-mole.plist → ...  (symlink)
 ~/.local/state/whack-a-mole/
-├── state.json                                              last-seen comment IDs + ci failures per repo
+├── state.json                                              per-repo cursors + seen maps (`bugbot_cursor`, `bugbot_seen`, `ci_seen`)
 └── logs/
     ├── watcher.log                                         poll loop output
     ├── launchd.{out,err}.log                               launchd's stdout/stderr capture
