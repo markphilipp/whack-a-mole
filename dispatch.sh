@@ -2,8 +2,7 @@
 # whack-a-mole — per-trigger dispatcher.
 #
 # Sets up a worktree on the PR branch, launches a headless Claude session with
-# the appropriate rubric, then tears down (unless mode=beta, which keeps the
-# worktree for inspection).
+# the appropriate rubric, then tears down.
 #
 # Usage:
 #   dispatch.sh --kind bugbot|ci --repo <slug> --pr <num> \
@@ -79,10 +78,6 @@ WT_BRANCH="wam-${KIND}-pr${PR}-${TRIGGER_ID}"
 WT_PATH="$LOCAL_REPO/$WT_ROOT/$WT_BRANCH"
 
 cleanup_worktree() {
-  if [[ "$MODE" == "beta" ]]; then
-    dlog "beta mode → keeping worktree at $WT_PATH for inspection"
-    return
-  fi
   dlog "tearing down worktree $WT_PATH"
   (
     cd "$LOCAL_REPO"

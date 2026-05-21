@@ -10,10 +10,10 @@ poll_interval_seconds: 180
 # Modes:
 #   alpha — detect only; log would-dispatch; no Claude session spawned.
 #   beta  — full dispatch, Claude runs and edits files in the worktree,
-#           but NO `git push` and NO `gh api` reply. Worktree is kept on disk
-#           for inspection. Flip to `live` once you've eyeballed a few runs.
+#           but NO `git push` and NO `gh api` reply. Flip to `live` once
+#           you've eyeballed a few runs.
 #   live  — full end-to-end. Pushes commits and posts replies.
-mode: alpha
+mode: beta
 
 # Only act on PRs you authored. Set to false to also handle teammates' / bots'
 # PRs (risky — they'll get auto-replies signed as you).
