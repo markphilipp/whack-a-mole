@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# whack-a-mole — shared helpers. Sourced by watcher.sh and dispatch.sh.
+
+set -euo pipefail
+
+# --- Paths ---------------------------------------------------------------------
+
+WAM_HOME="${WAM_HOME:-$HOME/.claude/whack-a-mole}"
+WAM_CONFIG="${WAM_CONFIG:-$HOME/.config/whack-a-mole/config.yaml}"
+WAM_STATE_DIR="${WAM_STATE_DIR:-$HOME/.local/state/whack-a-mole}"
+WAM_STATE_FILE="$WAM_STATE_DIR/state.json"
+WAM_LOG_DIR="$WAM_STATE_DIR/logs"
+WAM_WATCHER_LOG="$WAM_LOG_DIR/watcher.log"
+
+mkdir -p "$WAM_STATE_DIR" "$WAM_LOG_DIR"
+[[ -f "$WAM_STATE_FILE" ]] || echo '{}' > "$WAM_STATE_FILE"
+
+# --- Logging -------------------------------------------------------------------
+
+log() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  printf '%s %s\n' "$ts" "$*" >> "$WAM_WATCHER_LOG"
+  printf '%s %s\n' "$ts" "$*" >&2
+}
+
+die() { log "FATAL: $*"; exit 1; }
+
+# --- Config (yq) ---------------------------------------------------------------
+
+cfg() {
+  # cfg <yq-expression>  e.g.  cfg '.mode'
+  yq -r "$1" "$WAM_CONFIG"
+}
+
+cfg_repo_count() { yq -r '.repos | length' "$WAM_CONFIG"; }
+
+cfg_repo() {
+  # cfg_repo <index> <yq-suffix>  e.g.  cfg_repo 0 .github
+  yq -r ".repos[$1]$2" "$WAM_CONFIG"
+}
+
+cfg_repo_quick_checks() {
+  yq -r ".repos[$1].quick_checks[]" "$WAM_CONFIG"
+}
+
+# --- State (atomic) ------------------------------------------------------------
+#
+# Callers pass arbitrary jq filter expressions. We wrap with atomic tmp+mv.
+# Example mutation:
+#   state_apply --arg slug "$slug" --arg ts "$ts" '.repos[$slug].bugbot_last_seen = $ts'
+# Example read:
+#   state_read --arg slug "$slug" '.repos[$slug].bugbot_last_seen // ""'
+
+state_apply() {
+  local tmp="$WAM_STATE_FILE.tmp.$$"
+  jq "$@" "$WAM_STATE_FILE" > "$tmp" && mv "$tmp" "$WAM_STATE_FILE"
+}
+
+state_read() {
+  jq -r "$@" "$WAM_STATE_FILE"
+}
+
+# --- GitHub helpers ------------------------------------------------------------
+
+pr_author() {
+  gh api "repos/$1/pulls/$2" --jq '.user.login' 2>/dev/null || true
+}
+
+pr_head_ref() {
+  gh api "repos/$1/pulls/$2" --jq '.head.ref'
+}
+
+pr_head_sha() {
+  gh api "repos/$1/pulls/$2" --jq '.head.sha'
+}
+
+# Count commits on origin/<branch> in <local_repo> whose trailers match <pattern>.
+count_trailers() {
+  local local_repo="$1" branch="$2" pattern="$3"
+  (
+    cd "$local_repo" || return 0
+    git fetch --quiet origin "$branch" 2>/dev/null || true
+    git log --format='%(trailers)' "origin/$branch" 2>/dev/null \
+      | grep -c "$pattern" || true
+  )
+}
+
+head_has_trailer() {
+  local local_repo="$1" branch="$2" pattern="$3"
+  local trailers
+  trailers=$(
+    cd "$local_repo" || return 1
+    git log -1 --format='%(trailers)' "origin/$branch" 2>/dev/null || true
+  )
+  [[ "$trailers" == *"$pattern"* ]]
+}

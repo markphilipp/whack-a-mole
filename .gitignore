@@ -1,0 +1,13 @@
+# Personal config (never commit — has your local paths + github login)
+config.yaml
+
+# Local state / logs (shouldn't normally live here, but just in case)
+state.json
+logs/
+*.log
+
+# Editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp

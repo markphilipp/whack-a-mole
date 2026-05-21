@@ -1,0 +1,51 @@
+# whack-a-mole config
+#
+# Copy this to ~/.config/whack-a-mole/config.yaml (install.sh does that for you
+# the first time) and edit the repo list + toggles.
+
+poll_interval_seconds: 180
+
+# Modes:
+#   alpha — detect only; log would-dispatch; no Claude session spawned.
+#   beta  — full dispatch, Claude runs and edits files in the worktree,
+#           but NO `git push` and NO `gh api` reply. Worktree is kept on disk
+#           for inspection. Flip to `live` once you've eyeballed a few runs.
+#   live  — full end-to-end. Pushes commits and posts replies.
+mode: alpha
+
+# Only act on PRs you authored. Set to false to also handle teammates' / bots'
+# PRs (risky — they'll get auto-replies signed as you).
+only_my_prs: true
+my_github_login: markphilipp
+
+# Loop caps — separate because intent differs.
+#   bugbot: tight cap; a loop usually means a bad auto-fix.
+#   ci:     intentional loop; cap exists only to bound runaway cases.
+max_bugbot_fixes_per_pr: 2
+max_ci_fix_attempts: 10
+
+# Repos to watch. Each must already be cloned locally.
+repos:
+  - github: leaflink/marketplace
+    local: /Users/mark.philipp/Projects/llp-local/applications/marketplace
+    worktree_root: .claude/worktrees
+    # Quick checks the spawned Claude is allowed to run inside the worktree.
+    # MUST be fast and file-scoped. NEVER include tests, docker, or anything
+    # that touches the DB / network. CI runs the heavy stuff.
+    # {changed} expands to the space-separated list of changed file paths.
+    quick_checks:
+      - ruff check {changed}
+      - ruff format --check {changed}
+      - basedpyright {changed}
+
+  - github: leaflink/marketplace-web
+    local: /Users/mark.philipp/Projects/llp-local/applications/marketplace-web
+    worktree_root: .claude/worktrees
+    quick_checks:
+      - pnpm lint {changed}
+      - pnpm format:check {changed}
+      - pnpm typecheck
+
+triggers:
+  bugbot_comments: true
+  ci_failures: true
