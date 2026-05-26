@@ -218,8 +218,6 @@ $TRIGGER_JSON
 EOF
 )
 
-dlog "launching claude (mode=$MODE, kind=$KIND, model=opus, permission=auto)"
-
 # Export env vars for the spawned Claude (and any tool calls it makes).
 export WHACKAMOLE_TRIGGER_KIND="$KIND"
 export WHACKAMOLE_REPO="$REPO"
