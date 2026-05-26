@@ -3,6 +3,9 @@ state.json
 logs/
 *.log
 
+# Worktrees created for dispatched jobs
+worktrees/
+
 # Local config (real paths / identity). Template is config.yaml.example.
 config.yaml
 
