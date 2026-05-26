@@ -69,9 +69,19 @@ ok "$LOG_DIR"
 
 # --- Confirm config is present in the repo -----------------------------------
 
+# --- Scaffold config.yaml from template ---------------------------------------
+
 CONFIG_FILE="$SCRIPT_DIR/config.yaml"
-[[ -f "$CONFIG_FILE" ]] || { err "config not found: $CONFIG_FILE"; exit 1; }
-ok "config: $CONFIG_FILE"
+CONFIG_EXAMPLE="$SCRIPT_DIR/config.yaml.example"
+if [[ -f "$CONFIG_FILE" ]]; then
+  ok "config: $CONFIG_FILE"
+elif [[ -f "$CONFIG_EXAMPLE" ]]; then
+  cp "$CONFIG_EXAMPLE" "$CONFIG_FILE"
+  warn "created config.yaml from config.yaml.example — edit it (repos, git_user, git_user_email) before running"
+else
+  err "neither config.yaml nor config.yaml.example found in $SCRIPT_DIR"
+  exit 1
+fi
 
 # --- Initialize state file if absent ------------------------------------------
 

@@ -1,9 +1,12 @@
-# whack-a-mole config
+# whack-a-mole config — TEMPLATE.
 #
-# Lives in the repo. The daemon reads this file in place (via the
-# ~/.claude/whack-a-mole symlink install.sh creates). Edit directly.
+# Copy to config.yaml on setup (install.sh does this for you) and fill in your
+# values. config.yaml is gitignored; this .example file is the committed template.
 #
-# Keep the repo private if your local paths or github login are sensitive.
+#   cp config.yaml.example config.yaml
+#
+# The daemon reads config.yaml in place (via the ~/.claude/whack-a-mole symlink
+# install.sh creates). Edit it directly.
 
 poll_interval_seconds: 180
 
@@ -13,7 +16,7 @@ poll_interval_seconds: 180
 #           but NO `git push` and NO `gh api` reply. Flip to `live` once
 #           you've eyeballed a few runs.
 #   live  — full end-to-end. Pushes commits and posts replies.
-mode: beta
+mode: alpha
 
 # Model routing for spawned Claude sessions.
 # Default is cost-oriented; escalation is used for "complex" trigger signals and
@@ -27,7 +30,15 @@ models:
 # Only act on PRs you authored. Set to false to also handle teammates' / bots'
 # PRs (risky — they'll get auto-replies signed as you).
 only_my_prs: true
-my_github_login: markphilipp
+my_github_login: your-github-username
+
+# Git identity for the commits whack-a-mole makes in PR worktrees.
+#   git_user        — commit author name (applies to all repos).
+#   git_user_email  — default author email; any repo may override it with its
+#                     own `git_user_email` below (e.g. work vs. personal).
+# Set worktree-locally, so your global git config is never touched.
+git_user: your-github-username
+git_user_email: you@personal.example
 
 # Loop caps — separate because intent differs.
 #   bugbot: tight cap; a loop usually means a bad auto-fix.
@@ -37,16 +48,18 @@ max_ci_fix_attempts: 10
 
 # Repos to watch. Each must already be cloned locally.
 repos:
-  - github: leaflink/marketplace
-    local: /Users/mark.philipp/Projects/llp-local/applications/marketplace
+  - github: your-org/your-repo
+    local: /absolute/path/to/your/clone
     worktree_root: .claude/worktrees
+    # Optional per-repo email override; omit to use the top-level git_user_email.
+    git_user_email: you@work.example
     quick_checks:
       - ruff check {changed}
       - ruff format --check {changed}
       - basedpyright {changed}
 
-  - github: leaflink/marketplace-web
-    local: /Users/mark.philipp/Projects/llp-local/applications/marketplace-web
+  - github: your-org/another-repo
+    local: /absolute/path/to/another/clone
     worktree_root: .claude/worktrees
     quick_checks:
       - pnpm lint {changed}

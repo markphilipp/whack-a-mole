@@ -168,6 +168,24 @@ trap cleanup_worktree EXIT
   git branch --set-upstream-to="origin/$HEAD_REF" "$WT_BRANCH" 2>/dev/null || true
 )
 
+# Pin the git identity for commits Claude makes in this worktree. Name comes
+# from the top-level `git_user`; email is per-repo (`repos[].git_user_email`)
+# falling back to the top-level `git_user_email` default. Worktree-local config
+# so it never touches the user's global git settings.
+GIT_USER="$(cfg '.git_user // ""')"
+GIT_USER_EMAIL="$(cfg_repo "$REPO_IDX" '.git_user_email // ""')"
+[[ -n "$GIT_USER_EMAIL" && "$GIT_USER_EMAIL" != "null" ]] || GIT_USER_EMAIL="$(cfg '.git_user_email // ""')"
+if [[ -n "$GIT_USER" && "$GIT_USER" != "null" && -n "$GIT_USER_EMAIL" && "$GIT_USER_EMAIL" != "null" ]]; then
+  (
+    cd "$WT_PATH"
+    git config user.name "$GIT_USER"
+    git config user.email "$GIT_USER_EMAIL"
+  )
+  dlog "git identity set for worktree: $GIT_USER <$GIT_USER_EMAIL>"
+else
+  dlog "WARN: git_user/git_user_email not set in config — commits use ambient git identity"
+fi
+
 # --- Build quick-checks env var ------------------------------------------------
 
 QUICK_CHECKS=$(cfg_repo_quick_checks "$REPO_IDX" | paste -sd $'\n' -)

@@ -3,6 +3,9 @@ state.json
 logs/
 *.log
 
+# Local config (real paths / identity). Template is config.yaml.example.
+config.yaml
+
 # Editor cruft
 .DS_Store
 .vscode/

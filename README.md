@@ -39,14 +39,17 @@ The installer:
 - Creates `~/.local/state/whack-a-mole/{logs,}` for state + logs
 - Symlinks the repo into `~/.claude/whack-a-mole`
 - Symlinks the launchd plist into `~/Library/LaunchAgents/`
+- Scaffolds `config.yaml` from `config.yaml.example` if it doesn't exist yet
 
-Edit `config.yaml` (set `my_github_login`, add your repos), then:
+Then fill in your config (the installer copies the template; edit the copy):
 
 ```bash
+# config.yaml was created from config.yaml.example by install.sh.
+# Set my_github_login, git_user, git_user_email, and your repos, then:
 ./install.sh --load    # starts the watcher via launchd
 ```
 
-The config lives in the repo at `./config.yaml`. The daemon reads it in place via the `~/.claude/whack-a-mole` symlink — no separate copy is kept under `~/.config`. Treat the repo as private if your paths or login are sensitive.
+`config.yaml` is gitignored; `config.yaml.example` is the committed template. The daemon reads `config.yaml` in place via the `~/.claude/whack-a-mole` symlink — no separate copy is kept under `~/.config`.
 
 ## Config
 
@@ -61,12 +64,15 @@ See `config.yaml` for the full schema. Key fields:
 | `models.escalate_on_failure` | If `true`, retry once on escalation model when the default-model run exits non-zero |
 | `only_my_prs` | If `true`, only act on PRs whose author == `my_github_login` |
 | `my_github_login` | Your GitHub username |
+| `git_user` | Commit author **name** for auto-fix commits (applies to all repos) |
+| `git_user_email` | Default commit author **email**; per-repo `repos[].git_user_email` overrides it |
 | `max_bugbot_fixes_per_pr` | Tight cap (default 2) on auto-fix commits for bugbot findings |
 | `max_ci_fix_attempts` | Higher cap (default 10) on auto-fix commits for CI failures |
 | `poll_interval_seconds` | How often the daemon polls each repo (default 180) |
 | `repos[].github` | `owner/repo` slug |
 | `repos[].local` | Absolute path to your local clone |
 | `repos[].worktree_root` | Relative path inside the repo where worktrees go (default `.claude/worktrees`) |
+| `repos[].git_user_email` | Optional per-repo author email override (e.g. work vs. personal); falls back to top-level `git_user_email` |
 | `repos[].quick_checks` | Commands the spawned Claude is allowed to run for validation. **MUST be fast and file-scoped.** Use `{changed}` placeholder for changed file paths. |
 | `triggers.bugbot_comments` | Enable/disable trigger A |
 | `triggers.ci_failures` | Enable/disable trigger B |
@@ -128,7 +134,8 @@ Source (this repo, lives at `~/Projects/whack-a-mole`):
 ```
 .
 ├── README.md                                       (you are here)
-├── config.yaml                                     live config (read in place via symlink)
+├── config.yaml.example                             config template (committed)
+├── config.yaml                                     your live config (gitignored, read in place via symlink)
 ├── watcher.sh                                      polling loop
 ├── dispatch.sh                                     per-trigger handler
 ├── lib.sh                                          shared helpers
