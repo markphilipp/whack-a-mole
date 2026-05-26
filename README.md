@@ -2,7 +2,7 @@
 
 Moles keep popping up on your PRs — Cursor bugbot findings, failing CI checks. `whack-a-mole` watches for them and bonks each one with a Claude session before you have to.
 
-It's a small bash daemon that polls allowlisted GitHub repos every few minutes and, when it sees a new `cursor[bot]` review comment or a new failed CI check on a PR you authored, spins up a headless Claude session in an isolated git worktree on that PR's branch. By default it uses Sonnet first and escalates to Opus only when trigger signals look complex (or if the Sonnet run exits non-zero). The session reads the trigger, fixes if it's confident, pushes, and replies. Otherwise it pings you via the Claude app and tags you on the PR.
+It's a small bash daemon that polls allowlisted GitHub repos every few minutes and, when it sees a new `cursor[bot]` review comment or a new failed CI check on a PR you authored, spins up a headless Claude session in an isolated git worktree on that PR's branch. By default it uses Sonnet first and escalates to Opus only when trigger signals look complex (or if the Sonnet run exits non-zero). The session reads the trigger, fixes if it's confident, and pushes a commit co-authored by Claude — no acknowledgement comment. Otherwise it pings you via the Claude app and tags you on the PR.
 
 ## Why
 

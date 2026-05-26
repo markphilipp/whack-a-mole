@@ -43,14 +43,15 @@ Identify the actual error — file paths, line numbers, the failing assertion or
    Addresses failing CI check "<check name>".
 
    CI-Auto-Fix: <check name>@$WHACKAMOLE_HEAD_SHA
+   Co-Authored-By: Claude <noreply@anthropic.com>
    ```
 
-   (The trailer uses the SHA the check was *against* — the dispatcher uses this for loop suppression.)
+   (The `CI-Auto-Fix` trailer uses the SHA the check was *against* — the dispatcher uses this for loop suppression. Keep `Co-Authored-By` in the same contiguous trailer block — no blank line between trailers — so the fix is attributed to Claude.)
 5. If `WHACKAMOLE_MODE` is `live`:
    - Push: `git push origin HEAD:$WHACKAMOLE_HEAD_REF`
    - **Never** push to `main`/`master`. Verify the ref.
-   - Optional: comment on the PR with `gh api -X POST "repos/$WHACKAMOLE_REPO/issues/$WHACKAMOLE_PR_NUMBER/comments" -f body="Attempted CI fix for \`<check>\` in $(git rev-parse HEAD)"`
-   If `WHACKAMOLE_MODE` is `beta`: print the commit SHA + the would-be comment, then stop.
+   - **Do not comment on the PR.** A successful fix speaks through the commit and its `Co-Authored-By: Claude` trailer — no acknowledgement comment.
+   If `WHACKAMOLE_MODE` is `beta`: print the commit SHA, then stop.
 
 ### B) Cause is clear but not safely fixable from this context
 

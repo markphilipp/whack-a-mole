@@ -31,26 +31,20 @@ These env vars are set in your shell:
    Addresses cursor[bot] review comment.
 
    Bugbot-Auto-Fix: $WHACKAMOLE_TRIGGER_ID
+   Co-Authored-By: Claude <noreply@anthropic.com>
    ```
+
+   (Keep `Co-Authored-By` in the same contiguous trailer block as `Bugbot-Auto-Fix` — no blank line between trailers — so the fix is attributed to Claude.)
 
 5. If `WHACKAMOLE_MODE` is `live`:
    - Push: `git push origin HEAD:$WHACKAMOLE_HEAD_REF`
    - **Never** push to `main` or `master`. Verify the target ref before pushing.
-   - Reply on the comment:
-     ```
-     gh api -X POST "repos/$WHACKAMOLE_REPO/pulls/$WHACKAMOLE_PR_NUMBER/comments/$WHACKAMOLE_TRIGGER_ID/replies" -f body="Addressed in $(git rev-parse HEAD)"
-     ```
-   If `WHACKAMOLE_MODE` is `beta`: print the commit SHA + the reply body you would have posted, then stop. Do not push, do not call gh api.
+   - **Do not reply on the comment.** The fix speaks through the pushed commit and its `Co-Authored-By: Claude` trailer — no acknowledgement reply.
+   If `WHACKAMOLE_MODE` is `beta`: print the commit SHA, then stop. Do not push, do not call gh api.
 
 ### B) Not a real problem (false positive / can't reproduce / out of scope)
 
-Post a reply explaining why, citing the code. Example commands:
-
-```
-gh api -X POST "repos/$WHACKAMOLE_REPO/pulls/$WHACKAMOLE_PR_NUMBER/comments/$WHACKAMOLE_TRIGGER_ID/replies" -f body="<your reasoning>"
-```
-
-In `beta` mode: print the reply body, do not call gh api.
+Don't push back publicly in my name. **Do not post a reply.** Report your reasoning (which code, why it's a false positive) in your final output and stop — no `gh api` call in any mode.
 
 ### C) Ambiguous — needs my judgment
 
