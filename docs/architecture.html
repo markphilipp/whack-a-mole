@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>whack-a-mole — how it works</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --panel:     #161b22;
+    --panel-2:   #1c2330;
+    --border:    #2b3441;
+    --line:      #3a4654;
+    --text:      #e6edf3;
+    --muted:     #8b97a6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    --gh:    #d29922;   /* GitHub / cloud */
+    --daemon:#58a6ff;   /* the bash daemon */
+    --cfg:   #a371f7;   /* config + state */
+    --claude:#3fb950;   /* the spawned Claude session */
+    --gate:  #e3b341;   /* decision gates */
+    --stop:  #f85149;   /* dead-ends / returns */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #11202e 0%, var(--bg) 55%);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 40px 20px 80px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  code { font-family: var(--mono); font-size: .86em;
+         background:#0a0e14; border:1px solid var(--border); border-radius:5px; padding:1px 5px; }
+
+  header { text-align:center; margin-bottom:18px; }
+  h1 { font-size:2rem; margin:0 0 6px; letter-spacing:-0.5px; }
+  .tag { color:var(--muted); max-width:620px; margin:0 auto; }
+
+  .legend { display:flex; flex-wrap:wrap; gap:9px; justify-content:center; margin:22px auto 30px; }
+  .chip { display:flex; align-items:center; gap:7px; font-size:.8rem; color:var(--muted);
+          border:1px solid var(--border); background:var(--panel); border-radius:999px; padding:5px 12px; }
+  .sw { width:11px; height:11px; border-radius:3px; }
+  .sw.gh{background:var(--gh)} .sw.daemon{background:var(--daemon)}
+  .sw.cfg{background:var(--cfg)} .sw.claude{background:var(--claude)} .sw.gate{background:var(--gate)}
+
+  /* ---------- the flow spine ---------- */
+  .flow { display:flex; flex-direction:column; align-items:stretch; }
+
+  .node {
+    border:1px solid var(--border); border-left-width:5px; border-radius:12px;
+    background:var(--panel); padding:13px 16px; position:relative;
+  }
+  .node .who {
+    position:absolute; top:-9px; left:14px; font-size:.6rem; font-weight:700;
+    letter-spacing:.6px; text-transform:uppercase; padding:2px 8px; border-radius:6px; color:#06121f;
+  }
+  .node h3 { margin:0 0 4px; font-size:1rem; display:flex; align-items:center; gap:8px; }
+  .node p { margin:0; color:var(--muted); font-size:.86rem; }
+  .node ul { margin:7px 0 0; padding-left:0; list-style:none; }
+  .node li { font-size:.83rem; color:var(--muted); padding-left:16px; position:relative; margin:3px 0; }
+  .node li::before { content:"▸"; position:absolute; left:0; color:var(--line); }
+  .node li b { color:var(--text); font-weight:600; }
+
+  /* actor colors */
+  .node.launchd { border-left-color:#6e7681; } .node.launchd .who{ background:#6e7681; }
+  .node.daemon  { border-left-color:var(--daemon); } .node.daemon .who{ background:var(--daemon); }
+  .node.cfg     { border-left-color:var(--cfg); }    .node.cfg .who{ background:var(--cfg); }
+  .node.github  { border-left-color:var(--gh); }     .node.github .who{ background:var(--gh); }
+  .node.claude  { border-left-color:var(--claude); } .node.claude .who{ background:var(--claude); }
+
+  /* decision gate */
+  .gate {
+    border:1px dashed var(--gate); border-radius:12px; background:rgba(227,179,65,.06);
+    padding:12px 16px; position:relative;
+  }
+  .gate .q { font-weight:700; font-size:.95rem; display:flex; align-items:center; gap:8px; }
+  .gate .who{ position:absolute; top:-9px; left:14px; font-size:.6rem; font-weight:700; letter-spacing:.6px;
+    text-transform:uppercase; padding:2px 8px; border-radius:6px; background:var(--gate); color:#1a1608; }
+  .branches { display:flex; flex-wrap:wrap; gap:8px; margin-top:11px; }
+  .br { font-size:.8rem; border-radius:8px; padding:6px 11px; border:1px solid var(--border); flex:1 1 200px; }
+  .br b{ font-weight:700; }
+  .br.no  { background:rgba(248,81,73,.08);  border-color:#5a2a2a; color:#f0a9a5; }
+  .br.no b{ color:var(--stop); }
+  .br.yes { background:rgba(63,185,80,.08);  border-color:#1f4d2c; color:#9be0a8; }
+  .br.yes b{ color:var(--claude); }
+  .br code{ background:#0a0e14; }
+
+  /* ---------- connectors ---------- */
+  .conn { display:flex; flex-direction:column; align-items:center; padding:4px 0; }
+  .conn .stem { width:2px; height:26px; background:var(--line); position:relative; }
+  .conn .stem::after { content:""; position:absolute; bottom:-1px; left:-4px;
+    border:5px solid transparent; border-top-color:var(--line); }
+  .conn .lbl { font-size:.72rem; color:var(--muted); font-family:var(--mono);
+    background:var(--bg); padding:2px 9px; border:1px solid var(--border); border-radius:999px;
+    margin-bottom:2px; }
+
+  /* loop-back connector (the intentional fix→CI→fix cycle) */
+  .conn.loop .stem { background:repeating-linear-gradient(var(--gate) 0 5px, transparent 5px 10px); }
+  .conn.loop .stem::after { border-top-color:var(--gate); }
+  .conn.loop .lbl { color:var(--gate); border-color:#5a4a1a; }
+
+  /* terminal pills */
+  .term { text-align:center; font-size:.82rem; font-weight:600; border-radius:999px;
+    padding:8px 16px; display:inline-block; margin:0 auto; }
+  .term.start { background:#21262d; color:var(--muted); border:1px solid var(--border); }
+  .term.stop  { background:rgba(248,81,73,.1); color:#f0a9a5; border:1px solid #5a2a2a; }
+  .center { display:flex; justify-content:center; }
+
+  .note { font-size:.78rem; color:var(--muted); background:var(--panel); border:1px solid var(--border);
+    border-left:4px solid var(--gate); border-radius:8px; padding:9px 12px; margin-top:6px; }
+
+  /* ---------- reference cards ---------- */
+  h2.section { font-size:.78rem; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted);
+    text-align:center; margin:48px 0 16px; }
+  .ref { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  @media (max-width:640px){ .ref{ grid-template-columns:1fr; } }
+  .mode { border:1px solid var(--border); border-radius:12px; padding:14px; background:var(--panel); }
+  .mode .name { font-family:var(--mono); font-weight:700; }
+  .mode.alpha{ border-top:3px solid #6e7681; } .mode.beta{ border-top:3px solid var(--gh); }
+  .mode.live{ border-top:3px solid var(--claude); }
+  .mode p{ margin:7px 0 0; color:var(--muted); font-size:.82rem; }
+
+  .rails { border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:16px 18px; margin-top:14px; }
+  .rails ul{ margin:0; padding:0; list-style:none; columns:2; column-gap:26px; }
+  @media (max-width:640px){ .rails ul{ columns:1; } }
+  .rails li{ font-size:.82rem; color:var(--muted); padding-left:18px; position:relative;
+    break-inside:avoid; margin:5px 0; }
+  .rails li::before{ content:"🛡"; position:absolute; left:0; font-size:.75rem; }
+  .rails b{ color:var(--text); }
+
+  footer{ text-align:center; color:var(--muted); font-size:.76rem; margin-top:40px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>🔨🦟 whack-a-mole</h1>
+    <p class="tag">Follow one trigger all the way through: a mole pops up on GitHub, the daemon
+      spots it, and a Claude session bonks it — fix, push, reply.</p>
+  </header>
+
+  <div class="legend">
+    <span class="chip"><span class="sw gh"></span> GitHub (cloud)</span>
+    <span class="chip"><span class="sw daemon"></span> Daemon (bash on your Mac)</span>
+    <span class="chip"><span class="sw cfg"></span> Config &amp; state files</span>
+    <span class="chip"><span class="sw gate"></span> Decision gate</span>
+    <span class="chip"><span class="sw claude"></span> Spawned Claude session</span>
+  </div>
+
+  <!-- ================= THE STORY ================= -->
+  <div class="flow">
+
+    <div class="center"><span class="term start">▶ &nbsp;You log in to your Mac</span></div>
+
+    <div class="conn"><span class="lbl">launchd starts it &amp; keeps it alive</span><span class="stem"></span></div>
+
+    <div class="node launchd">
+      <span class="who">launchd</span>
+      <h3>1 · The watcher boots</h3>
+      <p><code>watcher.sh</code> launches as a background agent and runs forever.</p>
+    </div>
+
+    <div class="conn"><span class="lbl">begin a poll cycle</span><span class="stem"></span></div>
+
+    <div class="node daemon">
+      <span class="who">watcher.sh</span>
+      <h3>2 · Poll the allowlisted repos</h3>
+      <p>Wakes every <code>poll_interval_seconds</code> (default 180s) and, for each repo, reads fresh config + state first.</p>
+      <ul>
+        <li>📄 <b>config.yaml</b> → mode, repos, models, caps, git identity, quick_checks <em>(hot-reloaded every cycle)</em></li>
+        <li>💾 <b>state.json</b> → cursors + “seen” maps, so a mole is bonked at most once</li>
+      </ul>
+    </div>
+
+    <div class="conn"><span class="lbl">ask GitHub about your open PRs</span><span class="stem"></span></div>
+
+    <div class="node github">
+      <span class="who">GitHub API</span>
+      <h3>3 · Did a mole pop up?</h3>
+      <p>Two trigger types are checked on PRs <b>you authored</b>:</p>
+      <ul>
+        <li>🐛 <b>Trigger A</b> — a new <code>cursor[bot]</code> review/issue comment</li>
+        <li>❌ <b>Trigger B</b> — a new <b>failed</b> CI check on the PR's head SHA</li>
+      </ul>
+    </div>
+
+    <div class="conn"><span class="lbl">a candidate trigger</span><span class="stem"></span></div>
+
+    <div class="gate">
+      <span class="who">gate · loop protection</span>
+      <div class="q">🔍 Worth acting on?</div>
+      <p style="margin-top:5px;color:var(--muted);font-size:.84rem">New &amp; unseen · PR still open · thread not resolved · under the per-PR fix cap?</p>
+      <div class="branches">
+        <div class="br no"><b>✗ No</b> → record/suppress in <code>state.json</code>, or fire a <code>PushNotification</code> if a cap is hit ↺ back to poll</div>
+        <div class="br yes"><b>✓ Yes</b> → hand this trigger to <code>dispatch.sh</code> ↓</div>
+      </div>
+    </div>
+
+    <div class="conn"><span class="stem"></span></div>
+
+    <div class="gate">
+      <span class="who">gate · mode</span>
+      <div class="q">🎚 What mode are we in?</div>
+      <div class="branches">
+        <div class="br no"><b>alpha</b> → just log “would dispatch”. No worktree, no Claude. ↺ back to poll</div>
+        <div class="br yes"><b>beta / live</b> → proceed ↓</div>
+      </div>
+    </div>
+
+    <div class="conn"><span class="lbl">set the stage</span><span class="stem"></span></div>
+
+    <div class="node daemon">
+      <span class="who">dispatch.sh</span>
+      <h3>4 · Build an isolated workspace</h3>
+      <ul>
+        <li>🧠 <b>Pick the model</b> — <code>sonnet</code> by default, escalate to <code>opus</code> if the trigger text looks complex (security / concurrency / heavy CI)</li>
+        <li>🌳 <code>git worktree add</code> on the PR's branch — a throwaway checkout off your local clone</li>
+        <li>📌 Pin a worktree-local git identity; export <code>WHACKAMOLE_*</code> env + <code>quick_checks</code></li>
+      </ul>
+    </div>
+
+    <div class="conn"><span class="lbl">launch headless, with the matching rubric</span><span class="stem"></span></div>
+
+    <div class="node claude">
+      <span class="who">claude</span>
+      <h3>5 · Claude bonks the mole</h3>
+      <p>Runs <code>--print --permission-mode auto</code> using <code>prompts/bugbot-comment.md</code> or <code>ci-failure.md</code>.</p>
+      <ul>
+        <li>Reads the trigger → fixes the code if it's confident</li>
+        <li>Validates with <code>quick_checks</code> only (lint / format / type — <b>never</b> tests or docker; CI runs those)</li>
+        <li><code>git commit</code> with a <code>Bugbot-Auto-Fix</code> / <code>CI-Auto-Fix</code> trailer</li>
+      </ul>
+    </div>
+
+    <div class="conn"><span class="lbl">how did the run exit?</span><span class="stem"></span></div>
+
+    <div class="gate">
+      <span class="who">gate · result</span>
+      <div class="q">✅ Did the session succeed?</div>
+      <div class="branches">
+        <div class="br no"><b>✗ Non-zero</b> &amp; <code>escalate_on_failure</code> → retry once on <code>opus</code></div>
+        <div class="br yes"><b>✓ OK</b> → on to publish ↓</div>
+      </div>
+    </div>
+
+    <div class="conn"><span class="stem"></span></div>
+
+    <div class="gate">
+      <span class="who">gate · mode</span>
+      <div class="q">🚦 Publish the fix?</div>
+      <div class="branches">
+        <div class="br no"><b>beta</b> → <b>stop here.</b> Worktree kept on disk so you can eyeball the fix</div>
+        <div class="br yes"><b>live</b> → <code>git push</code> + <code>gh api</code> reply on the PR ↓</div>
+      </div>
+    </div>
+
+    <div class="conn"><span class="lbl">push + reply</span><span class="stem"></span></div>
+
+    <div class="node github">
+      <span class="who">GitHub</span>
+      <h3>6 · The fix lands on the PR</h3>
+      <p>Commit pushed to the PR branch, reply posted. <b>Pushing a new commit makes CI re-run…</b></p>
+    </div>
+
+    <div class="conn loop"><span class="lbl">↺ if CI fails again, a new Trigger B re-enters at step&nbsp;3 — bounded by <code>max_ci_fix_attempts</code></span><span class="stem"></span></div>
+
+    <div class="node claude">
+      <span class="who">dispatch.sh</span>
+      <h3>7 · Tear down</h3>
+      <p>The worktree + temp branch are removed (kept in <code>beta</code>), state is recorded, and the daemon returns to its poll loop.</p>
+    </div>
+
+    <div class="conn"><span class="lbl">↺ back to step 2</span><span class="stem"></span></div>
+
+    <div class="center"><span class="term stop">⏹ &nbsp;Idle until the next poll</span></div>
+
+  </div>
+
+  <!-- ================= REFERENCE ================= -->
+  <h2 class="section">The three modes (set <code>mode:</code> in config.yaml — hot-reloads)</h2>
+  <div class="ref">
+    <div class="mode alpha"><div class="name">alpha</div><p>Detect &amp; log only. Stops at gate in step 3. Run a few days to confirm it sees the right moles.</p></div>
+    <div class="mode beta"><div class="name">beta</div><p>Full dispatch + Claude edits, but stops before push/reply. Worktree kept for inspection.</p></div>
+    <div class="mode live"><div class="name">live</div><p>End-to-end: pushes the fix and replies. The CI loop (step 6→3) is intentional, bounded by the cap.</p></div>
+  </div>
+
+  <h2 class="section">Why it can't spin forever</h2>
+  <div class="rails">
+    <ul>
+      <li><b>Bugbot cap</b> — <code>max_bugbot_fixes_per_pr</code> (2), counted from commit trailers</li>
+      <li><b>CI cap</b> — <code>max_ci_fix_attempts</code> (10); the loop is intentional but bounded</li>
+      <li><b>Dedupe</b> — tuple cursor + <code>seen</code> maps in <code>state.json</code></li>
+      <li><b>Re-run guard</b> — head commit's <code>CI-Auto-Fix:</code> trailer suppresses the same check@sha</li>
+      <li><b>Normalized keys</b> — matrix/env suffixes stripped so equivalent failures collapse</li>
+      <li><b>Cap hit</b> — pings the Claude app via <code>PushNotification</code> instead of dispatching</li>
+    </ul>
+  </div>
+
+  <footer>Generated from <code>watcher.sh</code> · <code>dispatch.sh</code> · <code>lib.sh</code> · <code>config.yaml.example</code> — open in any browser.</footer>
+
+</div>
+</body>
+</html>
