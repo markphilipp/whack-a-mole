@@ -73,8 +73,20 @@ poll_bugbot_for_repo() {
     cursor_ts=$(date -u -v-1H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '-1 hour' +"%Y-%m-%dT%H:%M:%SZ")
   fi
   local cursor_id
-  cursor_id=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_cursor.id // 0')
-  [[ "$cursor_id" =~ ^[0-9]+$ ]] || cursor_id=0
+  cursor_id=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_cursor.id // ""')
+  if [[ ! "$cursor_id" =~ ^[0-9]+$ ]]; then
+    # No new-style cursor id. If we're migrating from the legacy ts-only
+    # `bugbot_last_seen`, that timestamp was "fully processed" — seed the id high
+    # so same-second comments at that ts aren't replayed. A genuinely newer ts
+    # still passes (ts > cursor_ts) and self-heals the cursor going forward.
+    local legacy_seen
+    legacy_seen=$(state_read --arg slug "$slug" '.repos[$slug].bugbot_last_seen // ""')
+    if [[ -n "$legacy_seen" ]]; then
+      cursor_id=9999999999999999
+    else
+      cursor_id=0
+    fi
+  fi
 
   local max_seen_ts="$cursor_ts"
   local max_seen_id="$cursor_id"
@@ -128,6 +140,10 @@ poll_bugbot_for_repo() {
         continue
       fi
 
+      # Stable cursor: only consider rows newer than (cursor_ts, cursor_id).
+      # Checked before any network calls so stale comments cost nothing.
+      (( is_newer == 1 )) || continue
+
       # Author filter.
       if [[ "$only_mine" == "true" ]]; then
         local author
@@ -135,8 +151,25 @@ poll_bugbot_for_repo() {
         [[ "$author" == "$me" ]] || continue
       fi
 
-      # Stable cursor: only dispatch rows newer than (cursor_ts, cursor_id).
-      (( is_newer == 1 )) || continue
+      # Only act on OPEN PRs. Merged/closed PRs can still carry cursor[bot]
+      # comments, but fixing them is pointless. Mark seen so a settled PR isn't
+      # re-checked every poll.
+      local prstate; prstate=$(pr_state "$slug" "$pr")
+      if [[ "$prstate" != "open" ]]; then
+        log "bugbot SKIP pr=$pr comment=$comment_id (PR state=${prstate:-unknown}, not open)"
+        state_apply --arg slug "$slug" --arg comment_id "$comment_id" \
+          '.repos[$slug].bugbot_seen[$comment_id] = "skipped-pr-not-open"'
+        continue
+      fi
+
+      # Skip comments whose review thread is already resolved. Not marked seen:
+      # a later un-resolve should become actionable again.
+      local resolved_ids
+      resolved_ids=$(pr_resolved_review_comment_ids "$slug" "$pr")
+      if grep -qxF "$comment_id" <<< "$resolved_ids"; then
+        log "bugbot SKIP pr=$pr comment=$comment_id (review thread resolved)"
+        continue
+      fi
 
       # Loop guard: count Bugbot-Auto-Fix trailers on PR.
       local head_ref; head_ref=$(pr_head_ref "$slug" "$pr")

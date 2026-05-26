@@ -75,6 +75,33 @@ pr_head_sha() {
   gh api "repos/$1/pulls/$2" --jq '.head.sha'
 }
 
+# "open" | "closed" | "" (on error). Note: GitHub reports merged PRs as "closed".
+pr_state() {
+  gh api "repos/$1/pulls/$2" --jq '.state' 2>/dev/null || true
+}
+
+# Print the databaseId (one per line) of every review comment that belongs to a
+# RESOLVED review thread on the PR. Empty output ⇒ nothing resolved / error.
+# Only review (line) comments live in threads; issue comments never appear here.
+pr_resolved_review_comment_ids() {
+  local slug="$1" pr="$2"
+  local owner="${slug%%/*}" name="${slug##*/}"
+  gh api graphql \
+    -f query='query($owner:String!,$name:String!,$pr:Int!){
+      repository(owner:$owner,name:$name){
+        pullRequest(number:$pr){
+          reviewThreads(first:100){
+            nodes{ isResolved comments(first:100){ nodes{ databaseId } } }
+          }
+        }
+      }
+    }' \
+    -f owner="$owner" -f name="$name" -F pr="$pr" 2>/dev/null \
+    | jq -r '.data.repository.pullRequest.reviewThreads.nodes[]?
+             | select(.isResolved) | .comments.nodes[]?.databaseId' 2>/dev/null \
+    || true
+}
+
 # Count commits on origin/<branch> in <local_repo> whose trailers match <pattern>.
 count_trailers() {
   local local_repo="$1" branch="$2" pattern="$3"

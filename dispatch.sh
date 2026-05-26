@@ -116,6 +116,15 @@ HEAD_SHA="$(pr_head_sha "$REPO" "$PR")"
 
 dlog "pr head_ref=$HEAD_REF head_sha=${HEAD_SHA:0:7}"
 
+# Belt-and-suspenders: never set up a worktree for a merged/closed PR. The
+# watcher should already filter these, but a PR can merge between poll and
+# dispatch, and this guards manual invocations too.
+PR_STATE="$(pr_state "$REPO" "$PR")"
+if [[ "$PR_STATE" != "open" ]]; then
+  dlog "PR #$PR state=${PR_STATE:-unknown} (not open) → skipping dispatch"
+  exit 0
+fi
+
 # --- Mode alpha: log and exit --------------------------------------------------
 
 if [[ "$MODE" == "alpha" ]]; then
