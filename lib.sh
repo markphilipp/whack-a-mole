@@ -44,6 +44,11 @@ cfg_repo_quick_checks() {
   yq -r ".repos[$1].quick_checks[]" "$WAM_CONFIG"
 }
 
+cfg_repo_setup() {
+  # Optional per-repo worktree provisioning commands. Absent ⇒ empty output.
+  yq -r ".repos[$1].worktree_setup[]?" "$WAM_CONFIG"
+}
+
 # --- State (atomic) ------------------------------------------------------------
 #
 # Callers pass arbitrary jq filter expressions. We wrap with atomic tmp+mv.

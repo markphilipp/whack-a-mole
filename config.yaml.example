@@ -53,6 +53,16 @@ repos:
     worktree_root: .claude/worktrees
     # Optional per-repo email override; omit to use the top-level git_user_email.
     git_user_email: you@work.example
+    # Optional per-repo worktree provisioning. A fresh git worktree shares .git
+    # but gets a clean checkout, so gitignored deps (.venv, node_modules) are
+    # absent and quick_checks would fail. These run once, in $WT_PATH, before the
+    # spawned Claude starts — as a single shell sequence (so `source` persists to
+    # the next line). Any non-zero exit aborts the dispatch and tears the
+    # worktree down. Omit the key for repos that need no setup.
+    worktree_setup:
+      - python3.14 -m venv .venv
+      - source .venv/bin/activate
+      - poetry install --no-root --with pyright --with dev
     quick_checks:
       - ruff check {changed}
       - ruff format --check {changed}
@@ -61,6 +71,8 @@ repos:
   - github: your-org/another-repo
     local: /absolute/path/to/another/clone
     worktree_root: .claude/worktrees
+    worktree_setup:
+      - pnpm i
     quick_checks:
       - pnpm lint {changed}
       - pnpm format:check {changed}

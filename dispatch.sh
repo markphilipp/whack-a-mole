@@ -48,6 +48,15 @@ dlog() {
 
 dlog "dispatch start kind=$KIND repo=$REPO pr=$PR trigger_id=$TRIGGER_ID mode=$MODE"
 
+# launchd hands us a static PATH with no node (fnm manages node per-shell). Load
+# fnm's shell env here so node lands on PATH for both worktree_setup and the
+# spawned Claude (which inherits this process's env). The actual version is
+# pinned later via `fnm use` against the worktree's .nvmrc. No-op when fnm isn't
+# installed or the repo doesn't use node.
+if command -v fnm >/dev/null 2>&1; then
+  eval "$(fnm env 2>/dev/null)" 2>/dev/null || true
+fi
+
 MODEL_REASON="default"
 
 should_use_escalation_model() {
@@ -184,6 +193,50 @@ if [[ -n "$GIT_USER" && "$GIT_USER" != "null" && -n "$GIT_USER_EMAIL" && "$GIT_U
   dlog "git identity set for worktree: $GIT_USER <$GIT_USER_EMAIL>"
 else
   dlog "WARN: git_user/git_user_email not set in config — commits use ambient git identity"
+fi
+
+# --- Pin node version from the worktree's .nvmrc ------------------------------
+#
+# `fnm env` above put fnm's multishell dir on PATH but pointed it nowhere (no
+# default alias). `fnm use` repoints that symlink to the repo's pinned version;
+# because the symlink is what PATH already references, this takes effect for
+# this process and everything it spawns afterward (setup + Claude). Skipped for
+# repos without a .nvmrc (e.g. the Python repo).
+if command -v fnm >/dev/null 2>&1 && [[ -f "$WT_PATH/.nvmrc" ]]; then
+  ( cd "$WT_PATH" && fnm use --install-if-missing ) 2>&1 | tee -a "$DISPATCH_LOG" || true
+  dlog "node pinned via fnm from $WT_PATH/.nvmrc ($(node --version 2>/dev/null || echo 'node still unresolved'))"
+fi
+
+# --- Per-repo worktree setup (deps install) -----------------------------------
+#
+# A fresh worktree shares .git but gets a clean checkout — the parent's .venv /
+# node_modules are gitignored and absent, so quick_checks would fail. Run the
+# repo's `worktree_setup` commands once, here, before Claude starts.
+#
+# Commands run as a single shell sequence inside $WT_PATH, so a step like
+# `source .venv/bin/activate` carries over to the next. Setup failure is fatal:
+# we abort the dispatch (the EXIT trap tears the worktree down) rather than hand
+# Claude a half-provisioned environment.
+SETUP_CMDS="$(cfg_repo_setup "$REPO_IDX" || true)"
+if [[ -n "$SETUP_CMDS" ]]; then
+  dlog "running worktree setup"
+  set +e
+  (
+    cd "$WT_PATH"
+    set -e
+    while IFS= read -r step; do
+      [[ -n "$step" ]] || continue
+      printf '\n+ %s\n' "$step"
+      eval "$step"
+    done <<< "$SETUP_CMDS"
+  ) 2>&1 | tee -a "$DISPATCH_LOG"
+  SETUP_EXIT="${PIPESTATUS[0]}"
+  set -e
+  if (( SETUP_EXIT != 0 )); then
+    dlog "FATAL: worktree setup failed (exit=$SETUP_EXIT) — aborting dispatch"
+    exit "$SETUP_EXIT"
+  fi
+  dlog "worktree setup complete"
 fi
 
 # --- Build quick-checks env var ------------------------------------------------
