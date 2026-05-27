@@ -59,6 +59,11 @@ repos:
     # spawned Claude starts — as a single shell sequence (so `source` persists to
     # the next line). Any non-zero exit aborts the dispatch and tears the
     # worktree down. Omit the key for repos that need no setup.
+    #
+    # Tip: if you maintain one provisioning script across tools (wta, AOE
+    # on_create, etc.), point a single entry at it instead of inlining steps:
+    #   worktree_setup:
+    #     - $HOME/path/to/worktree-init.sh
     worktree_setup:
       - python3.14 -m venv .venv
       - source .venv/bin/activate
