@@ -5,7 +5,7 @@
 #   - Validates required deps (gh, jq, yq, claude).
 #   - Creates ~/.local/state/whack-a-mole/{logs} for state + logs
 #   - Symlinks the repo into ~/.claude/whack-a-mole
-#   - Symlinks the launchd plist into ~/Library/LaunchAgents/
+#   - Renders the launchd plist (from the .template) into ~/Library/LaunchAgents/
 #   - Optionally loads launchd (--load)
 #
 # Config lives in the repo at ./config.yaml. Edit it directly.
@@ -108,19 +108,17 @@ else
 fi
 ok "symlink: $CLAUDE_LINK → $SCRIPT_DIR"
 
-# --- Symlink launchd plist ----------------------------------------------------
+# --- Render launchd plist -----------------------------------------------------
 
-PLIST_SRC="$SCRIPT_DIR/launchd/com.markphilipp.whack-a-mole.plist"
+PLIST_SRC="$SCRIPT_DIR/launchd/com.markphilipp.whack-a-mole.plist.template"
 PLIST_DST="$HOME/Library/LaunchAgents/com.markphilipp.whack-a-mole.plist"
 mkdir -p "$HOME/Library/LaunchAgents"
-if [[ -L "$PLIST_DST" ]]; then
-  rm "$PLIST_DST"
-elif [[ -e "$PLIST_DST" ]]; then
-  err "$PLIST_DST exists and is not a symlink — refusing to overwrite"
-  exit 1
-fi
-ln -s "$PLIST_SRC" "$PLIST_DST"
-ok "symlink: $PLIST_DST → $PLIST_SRC"
+# Render the template: launchd does not expand $HOME in plist string values, so
+# we substitute the real home path here. rm first to break any prior symlink (a
+# previous install symlinked this file) — otherwise `>` would follow it.
+rm -f "$PLIST_DST"
+sed "s|__HOME__|$HOME|g" "$PLIST_SRC" > "$PLIST_DST"
+ok "rendered plist: $PLIST_DST"
 
 # --- Make scripts executable --------------------------------------------------
 

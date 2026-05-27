@@ -15,6 +15,7 @@ These env vars are set in your shell:
 - `WHACKAMOLE_TRIGGER_JSON` — the raw GitHub comment JSON
 - `WHACKAMOLE_MODE` — `beta` (no push, no reply) or `live` (full)
 - `WHACKAMOLE_QUICK_CHECKS` — newline-separated commands you may run for validation; `{changed}` placeholder expands to changed file paths
+- `WHACKAMOLE_MAINTAINER` — GitHub login to @-mention when escalating (the repo owner)
 
 ## Decide one of three outcomes
 
@@ -54,7 +55,7 @@ When you're not confident enough to fix OR to confidently reject:
    `bugbot PR #<n> in <repo>: <short title> — needs your call`
 2. In `live` mode, also leave a PR comment tagging me so the PR reflects it:
    ```
-   gh api -X POST "repos/$WHACKAMOLE_REPO/pulls/$WHACKAMOLE_PR_NUMBER/comments/$WHACKAMOLE_TRIGGER_ID/replies" -f body="@markphilipp — whack-a-mole couldn't auto-resolve this. Notes: <your notes>"
+   gh api -X POST "repos/$WHACKAMOLE_REPO/pulls/$WHACKAMOLE_PR_NUMBER/comments/$WHACKAMOLE_TRIGGER_ID/replies" -f body="@$WHACKAMOLE_MAINTAINER — whack-a-mole couldn't auto-resolve this. Notes: <your notes>"
    ```
 3. Do not push code.
 

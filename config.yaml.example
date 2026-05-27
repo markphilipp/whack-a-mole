@@ -38,7 +38,7 @@ my_github_login: your-github-username
 #                     own `git_user_email` below (e.g. work vs. personal).
 # Set worktree-locally, so your global git config is never touched.
 git_user: your-github-username
-git_user_email: you@personal.example
+git_user_email: you@leaflink.com
 
 # Loop caps — separate because intent differs.
 #   bugbot: tight cap; a loop usually means a bad auto-fix.
@@ -48,11 +48,11 @@ max_ci_fix_attempts: 10
 
 # Repos to watch. Each must already be cloned locally.
 repos:
-  - github: your-org/your-repo
-    local: /absolute/path/to/your/clone
+  - github: leaflink/marketplace
+    local: /absolute/path/to/your/marketplace
     worktree_root: .claude/worktrees
     # Optional per-repo email override; omit to use the top-level git_user_email.
-    git_user_email: you@work.example
+    git_user_email: you@leaflink.com
     # Optional per-repo worktree provisioning. A fresh git worktree shares .git
     # but gets a clean checkout, so gitignored deps (.venv, node_modules) are
     # absent and quick_checks would fail. These run once, in $WT_PATH, before the
@@ -68,8 +68,8 @@ repos:
       - ruff format --check {changed}
       - basedpyright {changed}
 
-  - github: your-org/another-repo
-    local: /absolute/path/to/another/clone
+  - github: leaflink/marketplace-web
+    local: /absolute/path/to/your/marketplace-web
     worktree_root: .claude/worktrees
     worktree_setup:
       - pnpm i

@@ -282,6 +282,8 @@ export WHACKAMOLE_TRIGGER_ID="$TRIGGER_ID"
 export WHACKAMOLE_TRIGGER_JSON="$TRIGGER_JSON"
 export WHACKAMOLE_MODE="$MODE"
 export WHACKAMOLE_QUICK_CHECKS="$QUICK_CHECKS"
+# GitHub login to @-mention when escalating (outcome C). From config.
+export WHACKAMOLE_MAINTAINER="$(cfg '.my_github_login // ""')"
 
 # Run claude inside the worktree. Disallow tests/docker/etc at the tool level
 # as a belt-and-suspenders against the rubric.
