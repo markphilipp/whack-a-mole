@@ -16,7 +16,7 @@ poll_interval_seconds: 180
 #           but NO `git push` and NO `gh api` reply. Flip to `live` once
 #           you've eyeballed a few runs.
 #   live  — full end-to-end. Pushes commits and posts replies.
-mode: alpha
+mode: live
 
 # Model routing for spawned Claude sessions.
 # Default is cost-oriented; escalation is used for "complex" trigger signals and
