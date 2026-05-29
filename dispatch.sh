@@ -48,6 +48,36 @@ dlog() {
 
 dlog "dispatch start kind=$KIND repo=$REPO pr=$PR trigger_id=$TRIGGER_ID mode=$MODE"
 
+# --- Failure classification + teardown -----------------------------------------
+#
+# Flipped to 1 immediately before the Claude session starts. Everything up to
+# that point is environment/setup (PR lookup, fetch, worktree, deps) — if it
+# fails, no tokens were spent and the failure is almost always transient (SSH
+# agent locked, network blip, flaky deps install). The EXIT trap remaps any
+# such pre-agent non-zero exit to WAM_TEMPFAIL_EXIT so the watcher re-queues it
+# instead of marking it permanently handled. Once the agent has launched, the
+# real exit code stands (at-most-once: tokens were spent, don't auto-retry).
+AGENT_LAUNCHED=0
+WT_PATH=""
+WT_BRANCH=""
+
+on_exit() {
+  local code=$?
+  if [[ -n "$WT_PATH" ]]; then
+    dlog "tearing down worktree $WT_PATH"
+    (
+      cd "$LOCAL_REPO" 2>/dev/null || exit 0
+      git worktree remove --force "$WT_PATH" 2>/dev/null || true
+      git branch -D "$WT_BRANCH" 2>/dev/null || true
+    )
+  fi
+  if (( code != 0 )) && (( AGENT_LAUNCHED == 0 )) && (( code != WAM_TEMPFAIL_EXIT )); then
+    dlog "failure before agent launch (exit=$code) → signaling retryable tempfail ($WAM_TEMPFAIL_EXIT)"
+    exit "$WAM_TEMPFAIL_EXIT"
+  fi
+}
+trap on_exit EXIT
+
 # launchd hands us a static PATH with no node (fnm manages node per-shell). Load
 # fnm's shell env here so node lands on PATH for both worktree_setup and the
 # spawned Claude (which inherits this process's env). The actual version is
@@ -144,18 +174,9 @@ fi
 
 # --- Worktree setup ------------------------------------------------------------
 
+# Assigning these arms the EXIT trap's teardown (declared empty up top).
 WT_BRANCH="wam-${KIND}-pr${PR}-${TRIGGER_ID}"
 WT_PATH="$LOCAL_REPO/$WT_ROOT/$WT_BRANCH"
-
-cleanup_worktree() {
-  dlog "tearing down worktree $WT_PATH"
-  (
-    cd "$LOCAL_REPO"
-    git worktree remove --force "$WT_PATH" 2>/dev/null || true
-    git branch -D "$WT_BRANCH" 2>/dev/null || true
-  )
-}
-trap cleanup_worktree EXIT
 
 (
   cd "$LOCAL_REPO"
@@ -292,6 +313,9 @@ DISALLOWED='Bash(make test*) Bash(make docker-test*) Bash(pytest*) Bash(pnpm tes
 run_claude_session() {
   local model="$1"
   dlog "launching claude (mode=$MODE, kind=$KIND, model=$model, reason=$MODEL_REASON, permission=auto)"
+  # Past this point a session has started: tokens may be spent, so the watcher
+  # must NOT auto-retry on a non-zero exit. on_exit() keys off this flag.
+  AGENT_LAUNCHED=1
   (
     cd "$WT_PATH"
     claude --print \

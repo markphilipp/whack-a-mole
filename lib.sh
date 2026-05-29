@@ -12,6 +12,12 @@ WAM_STATE_FILE="$WAM_STATE_DIR/state.json"
 WAM_LOG_DIR="$WAM_STATE_DIR/logs"
 WAM_WATCHER_LOG="$WAM_LOG_DIR/watcher.log"
 
+# Sentinel exit code dispatch.sh uses to signal a failure that happened BEFORE
+# the Claude session launched (SSH agent locked, transient network, deps install
+# — no tokens spent). The watcher treats it as retryable rather than burning the
+# at-most-once token. Chosen to match sysexits.h EX_TEMPFAIL.
+WAM_TEMPFAIL_EXIT=75
+
 mkdir -p "$WAM_STATE_DIR" "$WAM_LOG_DIR"
 [[ -f "$WAM_STATE_FILE" ]] || echo '{}' > "$WAM_STATE_FILE"
 
@@ -25,6 +31,18 @@ log() {
 }
 
 die() { log "FATAL: $*"; exit 1; }
+
+# --- Time ----------------------------------------------------------------------
+
+now_utc() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+
+# Print an ISO-8601 UTC timestamp <hours> from now. BSD (macOS) date first,
+# GNU date fallback — same pattern as the cursor seeding in watcher.sh.
+deadline_from_now_hours() {
+  local hours="$1"
+  date -u -v+"${hours}H" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+    || date -u -d "+${hours} hours" +"%Y-%m-%dT%H:%M:%SZ"
+}
 
 # --- Config (yq) ---------------------------------------------------------------
 

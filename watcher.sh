@@ -58,6 +58,109 @@ record_ci_seen() {
      | .repos[$slug].ci_seen[$normalized_key] = $value'
 }
 
+# --- Pre-agent failure retries -------------------------------------------------
+#
+# When dispatch.sh exits WAM_TEMPFAIL_EXIT the failure happened before any Claude
+# session launched (SSH agent locked, network, deps) — no tokens spent, almost
+# always transient. Rather than burn the at-most-once `*_seen` token, we park the
+# trigger in `repos[slug].retry_queue` and re-dispatch it every poll until it
+# succeeds, the agent finally launches (any non-tempfail exit), or a time window
+# elapses. The queue is keyed independently of the bugbot cursor/since window, so
+# a failed comment still retries even after newer comments advance the cursor.
+
+# Add a trigger to the retry queue. No-op if already queued (preserves the
+# original deadline/first_attempt; process_retry_queue bumps the attempt count).
+enqueue_retry() {
+  local slug="$1" kind="$2" pr="$3" trigger_id="$4" row="$5"
+  [[ "$(cfg '.retry_pre_agent_failures // true')" == "true" ]] || return 0
+  local key="$kind:$pr:$trigger_id"
+  local existing
+  existing=$(state_read --arg slug "$slug" --arg key "$key" \
+    '.repos[$slug].retry_queue[$key] // ""')
+  [[ -n "$existing" && "$existing" != "null" ]] && return 0
+
+  local hours; hours=$(cfg '.pre_agent_retry_window_hours // 72')
+  local now; now=$(now_utc)
+  local deadline; deadline=$(deadline_from_now_hours "$hours")
+  state_apply \
+    --arg slug "$slug" --arg key "$key" --arg kind "$kind" --arg pr "$pr" \
+    --arg tid "$trigger_id" --arg row "$row" --arg now "$now" --arg deadline "$deadline" \
+    '.repos[$slug].retry_queue[$key] = {
+       kind: $kind, pr: $pr, trigger_id: $tid, row: $row,
+       first_attempt: $now, last_attempt: $now, deadline: $deadline, attempts: 1 }'
+  log "retry ENQUEUE repo=$slug kind=$kind pr=$pr trigger_id=$trigger_id deadline=$deadline"
+}
+
+# Dispatch a single trigger and route the exit code. Shared by the discovery
+# paths (first attempt) and process_retry_queue (subsequent attempts).
+#   exit 0                 → success
+#   exit WAM_TEMPFAIL_EXIT → pre-agent failure → (re)queue for retry
+#   other non-zero         → agent ran but failed → leave to at-most-once token
+dispatch_trigger() {
+  local slug="$1" kind="$2" pr="$3" trigger_id="$4" row="$5"
+  set +e
+  "$SCRIPT_DIR/dispatch.sh" \
+    --kind "$kind" --repo "$slug" --pr "$pr" \
+    --trigger-id "$trigger_id" --trigger-json "$row"
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+# Re-dispatch every queued trigger for this repo, dropping those that succeed,
+# whose agent finally ran, or whose retry window has elapsed.
+process_retry_queue() {
+  local idx="$1"
+  local slug; slug=$(cfg_repo "$idx" .github)
+  local keys
+  keys=$(state_read --arg slug "$slug" \
+    '(.repos[$slug].retry_queue // {}) | keys[]' 2>/dev/null || true)
+  [[ -z "$keys" ]] && return 0
+  local now; now=$(now_utc)
+
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    local entry
+    entry=$(state_read -c --arg slug "$slug" --arg key "$key" \
+      '.repos[$slug].retry_queue[$key] // empty')
+    [[ -z "$entry" ]] && continue
+
+    local kind pr tid row deadline attempts
+    kind=$(jq -r '.kind' <<< "$entry")
+    pr=$(jq -r '.pr' <<< "$entry")
+    tid=$(jq -r '.trigger_id' <<< "$entry")
+    row=$(jq -r '.row' <<< "$entry")
+    deadline=$(jq -r '.deadline' <<< "$entry")
+    attempts=$(jq -r '.attempts' <<< "$entry")
+
+    if [[ ! "$now" < "$deadline" ]]; then
+      log "retry GIVEUP repo=$slug kind=$kind pr=$pr trigger_id=$tid (window past $deadline after $attempts attempts)"
+      state_apply --arg slug "$slug" --arg key "$key" \
+        'del(.repos[$slug].retry_queue[$key])'
+      continue
+    fi
+
+    log "retry DISPATCH repo=$slug kind=$kind pr=$pr trigger_id=$tid attempt=$((attempts + 1)) deadline=$deadline"
+    local rc=0
+    dispatch_trigger "$slug" "$kind" "$pr" "$tid" "$row" || rc=$?
+
+    if (( rc == 0 )); then
+      log "retry SUCCESS repo=$slug kind=$kind pr=$pr trigger_id=$tid"
+      state_apply --arg slug "$slug" --arg key "$key" \
+        'del(.repos[$slug].retry_queue[$key])'
+    elif (( rc == WAM_TEMPFAIL_EXIT )); then
+      state_apply --arg slug "$slug" --arg key "$key" --arg now "$now" \
+        '.repos[$slug].retry_queue[$key].attempts += 1
+         | .repos[$slug].retry_queue[$key].last_attempt = $now'
+      log "retry PENDING repo=$slug kind=$kind pr=$pr trigger_id=$tid (still pre-agent, exit=$rc)"
+    else
+      log "retry DROP repo=$slug kind=$kind pr=$pr trigger_id=$tid (agent ran, exit=$rc — at-most-once)"
+      state_apply --arg slug "$slug" --arg key "$key" \
+        'del(.repos[$slug].retry_queue[$key])'
+    fi
+  done <<< "$keys"
+}
+
 # --- Trigger A: bugbot comments ------------------------------------------------
 
 poll_bugbot_for_repo() {
@@ -188,12 +291,13 @@ poll_bugbot_for_repo() {
         '.repos[$slug].bugbot_seen[$comment_id] = "dispatched"'
 
       log "bugbot DISPATCH repo=$slug pr=$pr comment=$comment_id"
-      "$SCRIPT_DIR/dispatch.sh" \
-        --kind bugbot \
-        --repo "$slug" \
-        --pr "$pr" \
-        --trigger-id "$comment_id" \
-        --trigger-json "$row" || log "dispatch returned non-zero for pr=$pr comment=$comment_id"
+      local rc=0
+      dispatch_trigger "$slug" bugbot "$pr" "$comment_id" "$row" || rc=$?
+      if (( rc == WAM_TEMPFAIL_EXIT )); then
+        enqueue_retry "$slug" bugbot "$pr" "$comment_id" "$row"
+      elif (( rc != 0 )); then
+        log "dispatch returned non-zero for pr=$pr comment=$comment_id (exit=$rc)"
+      fi
     done <<< "$matches"
   done
 
@@ -286,14 +390,14 @@ poll_ci_for_repo() {
       fi
 
       log "ci DISPATCH repo=$slug pr=$pr check=$check_name sha=${sha:0:7}"
-      "$SCRIPT_DIR/dispatch.sh" \
-        --kind ci \
-        --repo "$slug" \
-        --pr "$pr" \
-        --trigger-id "$check_id" \
-        --trigger-json "$run" || log "dispatch returned non-zero for pr=$pr check=$check_name"
-
       record_ci_seen "$slug" "$legacy_key" "$normalized_key" "dispatched"
+      local rc=0
+      dispatch_trigger "$slug" ci "$pr" "$check_id" "$run" || rc=$?
+      if (( rc == WAM_TEMPFAIL_EXIT )); then
+        enqueue_retry "$slug" ci "$pr" "$check_id" "$run"
+      elif (( rc != 0 )); then
+        log "dispatch returned non-zero for pr=$pr check=$check_name (exit=$rc)"
+      fi
     done <<< "$runs"
   done <<< "$prs"
 }
@@ -310,6 +414,7 @@ main() {
     for ((i=0; i<n; i++)); do
       local slug; slug=$(cfg_repo "$i" .github)
       log "poll repo=$slug"
+      process_retry_queue "$i" || log "retry queue failed for $slug (continuing)"
       if [[ "$bugbot_on" == "true" ]]; then
         poll_bugbot_for_repo "$i" || log "bugbot poll failed for $slug (continuing)"
       fi

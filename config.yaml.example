@@ -46,6 +46,16 @@ git_user_email: you@leaflink.com
 max_bugbot_fixes_per_pr: 2
 max_ci_fix_attempts: 10
 
+# Pre-agent failure retries. If a dispatch fails BEFORE the Claude session ever
+# launches — SSH agent locked, transient network, deps install — no tokens were
+# spent, so it's safe to keep trying. Such triggers are parked in a retry queue
+# and re-dispatched every poll until they succeed or this window elapses, then
+# dropped (logged as `retry GIVEUP`). Unlike the loop caps above there is no
+# attempt cap — only the clock — because each attempt is free. The default spans
+# a weekend: a Friday-evening breakage keeps retrying until ~Monday morning.
+retry_pre_agent_failures: true
+pre_agent_retry_window_hours: 72
+
 # Repos to watch. Each must already be cloned locally.
 repos:
   - github: leaflink/marketplace
